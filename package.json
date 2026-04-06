@@ -1,6 +1,8 @@
 {
   "name": "godaddy-forwarding-bot",
   "version": "1.0.0",
+  "description": "Desktop automation tool for updating GoDaddy forwarding URLs",
+  "author": "Albina Ahmeti",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
