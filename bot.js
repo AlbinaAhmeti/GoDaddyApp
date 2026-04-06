@@ -15,6 +15,7 @@ function requestStop() {
 function getChromePath() {
   const possiblePaths = [
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
     "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
     "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
   ];
@@ -26,19 +27,73 @@ function getChromePath() {
   throw new Error("Chrome was not found in the default install locations.");
 }
 
-function launchChromeForDebugging() {
-  const chromePath = getChromePath();
+const path = require("path");
+const os = require("os");
+const http = require("http");
 
-  const chrome = spawn(
-    chromePath,
-    ["--remote-debugging-port=9222", "--user-data-dir=C:\\chrome-godaddy"],
-    {
-      detached: true,
-      stdio: "ignore",
-    },
-  );
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getUserDataDir() {
+  if (process.platform === "darwin") {
+    return path.join(os.tmpdir(), "chrome-godaddy-profile");
+  }
+
+  if (process.platform === "win32") {
+    return "C:\\chrome-godaddy-profile";
+  }
+
+  return path.join(os.tmpdir(), "chrome-godaddy-profile");
+}
+
+function isDebugPortReady() {
+  return new Promise((resolve) => {
+    const req = http.get("http://127.0.0.1:9222/json/version", (res) => {
+      resolve(res.statusCode === 200);
+      res.resume();
+    });
+
+    req.on("error", () => resolve(false));
+    req.setTimeout(1500, () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
+}
+
+async function waitForDebugPort(retries = 10) {
+  for (let i = 0; i < retries; i++) {
+    const ready = await isDebugPortReady();
+    if (ready) return true;
+    await delay(1000);
+  }
+  return false;
+}
+
+async function launchChromeForDebugging() {
+  const chromePath = getChromePath();
+  const userDataDir = getUserDataDir();
+
+  const args = [
+    "--remote-debugging-port=9222",
+    `--user-data-dir=${userDataDir}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    "https://dcc.godaddy.com/control/portfolio",
+  ];
+
+  const chrome = spawn(chromePath, args, {
+    detached: true,
+    stdio: "ignore",
+  });
 
   chrome.unref();
+
+  const ready = await waitForDebugPort(12);
+  if (!ready) {
+    throw new Error("Chrome started, but remote debugging port 9222 did not become available.");
+  }
 }
 
 function buildForwardUrl(domain) {
@@ -446,9 +501,7 @@ async function setForwardingForDomain(page, domain, log) {
 async function runBot(log) {
   shouldStop = false;
 
-  launchChromeForDebugging();
-  await new Promise((resolve) => setTimeout(resolve, 4000));
-
+  await launchChromeForDebugging();
   const browser = await chromium.connectOverCDP("http://127.0.0.1:9222");
 
   const contexts = browser.contexts();
