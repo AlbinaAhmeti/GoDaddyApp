@@ -1,14 +1,27 @@
 {
-  "name": "godaddy-forwarding-app",
+  "name": "godaddy-forwarding-bot",
   "version": "1.0.0",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "dist": "electron-builder --mac"
   },
   "dependencies": {
-    "playwright": "^1.53.0"
+    "playwright": "^1.54.0"
   },
   "devDependencies": {
-    "electron": "^37.0.0"
+    "electron": "^37.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.albina.godaddybot",
+    "productName": "GoDaddy Forwarding Bot",
+    "files": [
+      "**/*"
+    ],
+    "mac": {
+      "target": ["dmg", "zip"],
+      "category": "public.app-category.utilities"
+    }
   }
 }
