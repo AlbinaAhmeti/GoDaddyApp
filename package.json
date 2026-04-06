@@ -1,0 +1,14 @@
+{
+  "name": "godaddy-forwarding-app",
+  "version": "1.0.0",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "playwright": "^1.53.0"
+  },
+  "devDependencies": {
+    "electron": "^37.0.0"
+  }
+}
