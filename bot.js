@@ -235,9 +235,10 @@ async function collectDomainsWithStatus(page) {
     const seen = new Set();
     const today = todayStart();
 
+    // Domain rows
     const domainNodes = Array.from(
-      document.querySelectorAll(".grid-fixed-columns-container .grid-cell-container.fixed")
-    ).filter((el) => el.querySelector(".domain-name-cell a"));
+      document.querySelectorAll('.grid-fixed-columns-container .grid-cell-container.fixed')
+    ).filter(el => el.querySelector('.domain-name-cell a'));
 
     for (const domainRow of domainNodes) {
       const cls = domainRow.className || "";
@@ -246,17 +247,19 @@ async function collectDomainsWithStatus(page) {
 
       const rowIndex = match[1];
 
-      const domainEl = domainRow.querySelector(".domain-name-cell a");
+      const domainEl = domainRow.querySelector('.domain-name-cell a');
       const domain = normalizeText(domainEl?.textContent).toLowerCase();
 
       if (!domain) continue;
       if (!/^[a-z0-9-]+\.[a-z]{2,}$/i.test(domain)) continue;
       if (seen.has(domain)) continue;
 
+      // Expiration cell for same row-index
       const expirationRow = document.querySelector(
         `.grid-data-container .grid-cell-container.row-index-${rowIndex}[style*="left: 398px"]`
       );
 
+      // Status cell for same row-index
       const statusRow = document.querySelector(
         `.grid-data-container .grid-cell-container.row-index-${rowIndex}.last-column`
       );
@@ -269,6 +272,7 @@ async function collectDomainsWithStatus(page) {
 
       const lowerStatus = statusText.toLowerCase();
 
+      // 1) primary source = row status
       if (lowerStatus.includes("active")) {
         finalStatus = "Active";
         eligible = true;
@@ -282,6 +286,7 @@ async function collectDomainsWithStatus(page) {
         finalStatus = "Inactive";
         eligible = false;
       } else {
+        // 2) fallback = expiration date
         const expDate = parseDateText(expirationText);
 
         if (expDate) {
