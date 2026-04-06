@@ -22,10 +22,10 @@ jobs:
         run: npm install
 
       - name: Install Playwright
-        run: npx playwright install chromium
+        run: npx playwright install --with-deps
 
       - name: Build app
-        run: npm run dist
+        run: npx electron-builder --mac --publish=never
 
       - name: Upload build
         uses: actions/upload-artifact@v4
