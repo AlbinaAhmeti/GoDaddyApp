@@ -1,9 +1,6 @@
 const { chromium } = require("playwright");
 const { spawn } = require("child_process");
 const fs = require("fs");
-const path = require("path");
-const os = require("os");
-const http = require("http");
 
 const BASE_HOST = "buynownames.com";
 const BASE_PATH_WITH_SLASH = "/domain-for-sale/";
@@ -15,17 +12,10 @@ function requestStop() {
   shouldStop = true;
 }
 
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function getChromePath() {
   const possiblePaths = [
-    // macOS
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
-
-    // Windows
     "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
     "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
   ];
@@ -35,6 +25,14 @@ function getChromePath() {
   }
 
   throw new Error("Chrome was not found in the default install locations.");
+}
+
+const path = require("path");
+const os = require("os");
+const http = require("http");
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function getUserDataDir() {
@@ -57,7 +55,6 @@ function isDebugPortReady() {
     });
 
     req.on("error", () => resolve(false));
-
     req.setTimeout(1500, () => {
       req.destroy();
       resolve(false);
@@ -65,7 +62,7 @@ function isDebugPortReady() {
   });
 }
 
-async function waitForDebugPort(retries = 15) {
+async function waitForDebugPort(retries = 10) {
   for (let i = 0; i < retries; i++) {
     const ready = await isDebugPortReady();
     if (ready) return true;
@@ -74,32 +71,11 @@ async function waitForDebugPort(retries = 15) {
   return false;
 }
 
-function tryRemoveOldSingletonLocks(userDataDir) {
-  try {
-    const candidates = [
-      path.join(userDataDir, "SingletonLock"),
-      path.join(userDataDir, "SingletonCookie"),
-      path.join(userDataDir, "SingletonSocket"),
-    ];
-
-    for (const file of candidates) {
-      if (fs.existsSync(file)) {
-        try {
-          fs.rmSync(file, { force: true });
-        } catch {}
-      }
-    }
-  } catch {}
-}
-
 async function launchChromeForDebugging() {
   const chromePath = getChromePath();
   const userDataDir = getUserDataDir();
 
-  tryRemoveOldSingletonLocks(userDataDir);
-
   const args = [
-    "--remote-debugging-address=127.0.0.1",
     "--remote-debugging-port=9222",
     `--user-data-dir=${userDataDir}`,
     "--no-first-run",
@@ -107,40 +83,17 @@ async function launchChromeForDebugging() {
     "https://dcc.godaddy.com/control/portfolio",
   ];
 
-  if (process.platform === "darwin") {
-    // On macOS, using "open -na" is often more reliable for launching a fresh app instance
-    spawn("open", ["-na", "Google Chrome", "--args", ...args], {
-      detached: true,
-      stdio: "ignore",
-    }).unref();
-  } else {
-    spawn(chromePath, args, {
-      detached: true,
-      stdio: "ignore",
-    }).unref();
-  }
+  const chrome = spawn(chromePath, args, {
+    detached: true,
+    stdio: "ignore",
+  });
 
-  const ready = await waitForDebugPort(15);
+  chrome.unref();
+
+  const ready = await waitForDebugPort(12);
   if (!ready) {
-    throw new Error(
-      "Chrome started, but remote debugging port 9222 did not become available."
-    );
+    throw new Error("Chrome started, but remote debugging port 9222 did not become available.");
   }
-}
-
-async function connectToChromeWithRetry(retries = 5) {
-  let lastError;
-
-  for (let i = 0; i < retries; i++) {
-    try {
-      return await chromium.connectOverCDP("http://127.0.0.1:9222");
-    } catch (err) {
-      lastError = err;
-      await delay(1500);
-    }
-  }
-
-  throw lastError;
 }
 
 function buildForwardUrl(domain) {
@@ -151,11 +104,11 @@ function isMatchingBaseForward(url) {
   try {
     const u = new URL(url);
     const host = u.hostname.toLowerCase();
-    const pathname = u.pathname.toLowerCase();
+    const path = u.pathname.toLowerCase();
 
     return (
       host === BASE_HOST &&
-      (pathname === BASE_PATH_WITH_SLASH || pathname === BASE_PATH_NO_SLASH)
+      (path === BASE_PATH_WITH_SLASH || path === BASE_PATH_NO_SLASH)
     );
   } catch {
     return false;
@@ -178,7 +131,7 @@ async function waitAndClick(page, selectors, timeout = 7000) {
       await el.waitFor({ state: "visible", timeout });
       await el.click();
       return true;
-    } catch {}
+    } catch { }
   }
   return false;
 }
@@ -191,7 +144,7 @@ async function dismissCookieBanner(page) {
       'button:has-text("I agree")',
       'button:has-text("Got it")',
     ],
-    1500
+    1500,
   );
 }
 
@@ -235,9 +188,10 @@ async function collectDomainsWithStatus(page) {
     const seen = new Set();
     const today = todayStart();
 
+    // Domain rows
     const domainNodes = Array.from(
-      document.querySelectorAll(".grid-fixed-columns-container .grid-cell-container.fixed")
-    ).filter((el) => el.querySelector(".domain-name-cell a"));
+      document.querySelectorAll('.grid-fixed-columns-container .grid-cell-container.fixed')
+    ).filter(el => el.querySelector('.domain-name-cell a'));
 
     for (const domainRow of domainNodes) {
       const cls = domainRow.className || "";
@@ -246,17 +200,19 @@ async function collectDomainsWithStatus(page) {
 
       const rowIndex = match[1];
 
-      const domainEl = domainRow.querySelector(".domain-name-cell a");
+      const domainEl = domainRow.querySelector('.domain-name-cell a');
       const domain = normalizeText(domainEl?.textContent).toLowerCase();
 
       if (!domain) continue;
       if (!/^[a-z0-9-]+\.[a-z]{2,}$/i.test(domain)) continue;
       if (seen.has(domain)) continue;
 
+      // Expiration cell for same row-index
       const expirationRow = document.querySelector(
         `.grid-data-container .grid-cell-container.row-index-${rowIndex}[style*="left: 398px"]`
       );
 
+      // Status cell for same row-index
       const statusRow = document.querySelector(
         `.grid-data-container .grid-cell-container.row-index-${rowIndex}.last-column`
       );
@@ -269,6 +225,7 @@ async function collectDomainsWithStatus(page) {
 
       const lowerStatus = statusText.toLowerCase();
 
+      // 1) primary source = row status
       if (lowerStatus.includes("active")) {
         finalStatus = "Active";
         eligible = true;
@@ -282,6 +239,7 @@ async function collectDomainsWithStatus(page) {
         finalStatus = "Inactive";
         eligible = false;
       } else {
+        // 2) fallback = expiration date
         const expDate = parseDateText(expirationText);
 
         if (expDate) {
@@ -325,7 +283,7 @@ async function goToDomainForwarding(page, domain) {
   const clickedDns = await waitAndClick(
     page,
     ['a:has-text("DNS")', 'button:has-text("DNS")', 'text="DNS"'],
-    8000
+    8000,
   );
 
   if (!clickedDns) {
@@ -341,7 +299,7 @@ async function goToDomainForwarding(page, domain) {
       'button:has-text("Forwarding")',
       'text="Forwarding"',
     ],
-    8000
+    8000,
   );
 
   if (!clickedForwarding) {
@@ -355,7 +313,10 @@ async function findForwardingRow(page, domain) {
   const row = page.locator("tr").filter({ hasText: domain }).first();
   if (await row.count().catch(() => 0)) return row;
 
-  const rowRole = page.locator('[role="row"]').filter({ hasText: domain }).first();
+  const rowRole = page
+    .locator('[role="row"]')
+    .filter({ hasText: domain })
+    .first();
   if (await rowRole.count().catch(() => 0)) return rowRole;
 
   return null;
@@ -377,7 +338,7 @@ async function openEditModal(page, domain) {
       await buttons.nth(i).click();
       clicked = true;
       break;
-    } catch {}
+    } catch { }
   }
 
   if (!clicked) return false;
@@ -409,7 +370,7 @@ async function readForwardingFromModal(page) {
     const select = modal.locator("select").first();
     await select.waitFor({ state: "visible", timeout: 4000 });
     protocol = (await select.inputValue().catch(() => "http://")) || "http://";
-  } catch {}
+  } catch { }
 
   const input = modal.locator('input[type="text"]').first();
   await input.waitFor({ state: "visible", timeout: 4000 });
@@ -434,7 +395,7 @@ async function fillForwardingModal(page, fullUrl) {
     await select.selectOption(protocol).catch(async () => {
       await select.selectOption({ label: protocol }).catch(() => null);
     });
-  } catch {}
+  } catch { }
 
   const input = modal.locator('input[type="text"]').first();
   await input.waitFor({ state: "visible", timeout: 4000 });
@@ -461,7 +422,7 @@ async function saveForwardingModal(page) {
       'button[aria-label="Close"]',
       'button[aria-label*="close"]',
     ],
-    3000
+    3000,
   );
 
   await page.waitForTimeout(1000);
@@ -482,7 +443,7 @@ async function closeModalIfOpen(page) {
   await waitAndClick(
     page,
     ['button[aria-label="Close"]', 'button[aria-label*="close"]'],
-    1500
+    1500,
   );
 }
 
@@ -541,7 +502,7 @@ async function runBot(log) {
   shouldStop = false;
 
   await launchChromeForDebugging();
-  const browser = await connectToChromeWithRetry();
+  const browser = await chromium.connectOverCDP("http://127.0.0.1:9222");
 
   const contexts = browser.contexts();
   if (!contexts.length) {
@@ -574,9 +535,7 @@ async function runBot(log) {
 
   for (const item of allDomains) {
     log(
-      `${item.domain} | status=${item.status} | raw=${item.rawStatus} | exp=${item.expiration} | ${
-        item.eligible ? "ACTIVE" : "SKIP"
-      }`
+      `${item.domain} | status=${item.status} | raw=${item.rawStatus} | exp=${item.expiration} | ${item.eligible ? "ACTIVE" : "SKIP"}`
     );
   }
 
