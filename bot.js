@@ -30,9 +30,7 @@ async function safeRun(fn, retries = 2, waitMs = 1500) {
       return await fn();
     } catch (err) {
       lastError = err;
-      if (i < retries) {
-        await delay(waitMs);
-      }
+      if (i < retries) await delay(waitMs);
     }
   }
 
@@ -58,11 +56,9 @@ function getUserDataDir() {
   if (process.platform === "darwin") {
     return path.join(os.tmpdir(), "chrome-godaddy-profile");
   }
-
   if (process.platform === "win32") {
     return "C:\\chrome-godaddy-profile";
   }
-
   return path.join(os.tmpdir(), "chrome-godaddy-profile");
 }
 
@@ -92,7 +88,6 @@ function isDebugPortReady() {
     });
 
     req.on("error", () => resolve(false));
-
     req.setTimeout(1500, () => {
       req.destroy();
       resolve(false);
@@ -100,7 +95,7 @@ function isDebugPortReady() {
   });
 }
 
-async function waitForDebugPort(retries = 15) {
+async function waitForDebugPort(retries = 20) {
   for (let i = 0; i < retries; i++) {
     const ready = await isDebugPortReady();
     if (ready) return true;
@@ -138,13 +133,11 @@ async function launchChromeForDebugging() {
 
   const ready = await waitForDebugPort(20);
   if (!ready) {
-    throw new Error(
-      "Chrome started, but remote debugging port 9222 did not become available."
-    );
+    throw new Error("Chrome started, but remote debugging port 9222 did not become available.");
   }
 }
 
-async function connectToChromeWithRetry(retries = 6) {
+async function connectToChromeWithRetry(retries = 8) {
   let lastError;
 
   for (let i = 0; i < retries; i++) {
@@ -268,24 +261,25 @@ async function dismissCookieBanner(page) {
   );
 }
 
-async function collectDomainsWithStatus(page, log = () => {}) {
+async function gotoPortfolio(page, log = () => {}) {
   await page.goto("https://dcc.godaddy.com/control/portfolio", {
     waitUntil: "domcontentloaded",
   });
 
   await page.waitForLoadState("networkidle").catch(() => null);
   await dismissCookieBanner(page);
-  await page.waitForTimeout(5000);
-
-  const currentUrl = page.url();
-  log(`Current URL: ${currentUrl}`);
+  await page.waitForTimeout(4000);
 
   const bodyText = await page.locator("body").innerText().catch(() => "");
   if (/sign in|log in|login/i.test(bodyText)) {
     throw new Error("You are not logged into GoDaddy in the opened Chrome window.");
   }
 
-  const domains = await page.evaluate(() => {
+  log(`Current URL: ${page.url()}`);
+}
+
+async function extractVisiblePortfolioRows(page) {
+  return await page.evaluate(() => {
     function normalizeText(text) {
       return (text || "").replace(/\s+/g, " ").trim();
     }
@@ -293,37 +287,28 @@ async function collectDomainsWithStatus(page, log = () => {}) {
     function parseDateText(text) {
       const clean = normalizeText(text);
       if (!clean) return null;
-
       const parsed = new Date(clean);
       if (Number.isNaN(parsed.getTime())) return null;
-
       parsed.setHours(0, 0, 0, 0);
       return parsed;
-    }
-
-    function todayStart() {
-      const d = new Date();
-      d.setHours(0, 0, 0, 0);
-      return d;
     }
 
     function looksLikeDomain(text) {
       return /^[a-z0-9-]+\.[a-z]{2,}$/i.test(text || "");
     }
 
-    const results = [];
+    const rows = [];
     const seen = new Set();
-    const today = todayStart();
 
     const rowCandidates = Array.from(document.querySelectorAll("tr, [role='row']"));
 
     for (const row of rowCandidates) {
-      const rowText = normalizeText(row.textContent);
-      if (!rowText) continue;
-
       const links = Array.from(row.querySelectorAll("a"));
-      let domain = "";
+      const cells = Array.from(
+        row.querySelectorAll("td, [role='cell'], .grid-cell-container")
+      );
 
+      let domain = "";
       for (const a of links) {
         const txt = normalizeText(a.textContent).toLowerCase();
         if (looksLikeDomain(txt)) {
@@ -335,15 +320,12 @@ async function collectDomainsWithStatus(page, log = () => {}) {
       if (!domain) continue;
       if (seen.has(domain)) continue;
 
-      const cells = Array.from(
-        row.querySelectorAll("td, [role='cell'], .grid-cell-container")
-      ).map((el) => normalizeText(el.textContent));
-
-      const joined = cells.join(" | ");
+      const cellTexts = cells.map((el) => normalizeText(el.textContent));
+      const joined = cellTexts.join(" | ");
       const lowerJoined = joined.toLowerCase();
 
       let expirationText = "";
-      for (const c of cells) {
+      for (const c of cellTexts) {
         const d = parseDateText(c);
         if (d) {
           expirationText = c;
@@ -352,45 +334,19 @@ async function collectDomainsWithStatus(page, log = () => {}) {
       }
 
       let rawStatus = "Unknown";
-
       if (lowerJoined.includes("redemption")) {
         rawStatus = "Redemption";
       } else if (lowerJoined.includes("inactive")) {
         rawStatus = "Inactive";
       } else if (lowerJoined.includes("expired")) {
         rawStatus = "Expired";
+      } else if (lowerJoined.includes("pending update")) {
+        rawStatus = "Pending Update";
       } else if (lowerJoined.includes("active")) {
         rawStatus = "Active";
       }
 
-      let finalStatus = "Unknown";
-      let eligible = false;
-
-      if (rawStatus === "Active") {
-        finalStatus = "Active";
-        eligible = true;
-      } else if (
-        rawStatus === "Redemption" ||
-        rawStatus === "Inactive" ||
-        rawStatus === "Expired"
-      ) {
-        finalStatus = rawStatus;
-        eligible = false;
-      } else {
-        const expDate = parseDateText(expirationText);
-        if (expDate) {
-          if (expDate >= today) {
-            finalStatus = "Active";
-            eligible = true;
-          } else {
-            finalStatus = "Not Active";
-            eligible = false;
-          }
-        }
-      }
-
-      let forwardingText = "";
-
+      let forwarding = "";
       for (const a of links) {
         const href = a.getAttribute("href") || "";
         const txt = normalizeText(a.textContent);
@@ -399,45 +355,121 @@ async function collectDomainsWithStatus(page, log = () => {}) {
           href.toLowerCase().includes("buynownames.com/domain-for-sale") ||
           txt.toLowerCase().includes("buynownames.com/domain-for-sale")
         ) {
-          forwardingText = href || txt;
+          forwarding = href || txt;
           break;
         }
       }
 
-      if (!forwardingText) {
-        for (const c of cells) {
+      if (!forwarding) {
+        for (const c of cellTexts) {
           if (c.toLowerCase().includes("buynownames.com/domain-for-sale")) {
-            forwardingText = c;
+            forwarding = c;
             break;
           }
         }
       }
 
-      results.push({
+      rows.push({
         domain,
         expiration: expirationText || "Unknown",
         rawStatus,
-        status: finalStatus,
-        eligible,
-        forwarding: forwardingText || "",
+        forwarding: forwarding || "",
       });
 
       seen.add(domain);
     }
 
-    return results;
+    return rows;
   });
+}
 
-  log(`Visible rows read: ${domains.length}`);
+function computeEligibility(rows) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
 
-  if (!domains.length) {
-    await page.screenshot({
-      path: "debug-portfolio-no-domains.png",
-      fullPage: true,
-    }).catch(() => null);
+  return rows.map((item) => {
+    const expirationText = item.expiration || "";
+    let finalStatus = "Unknown";
+    let eligible = false;
+
+    const lowerStatus = (item.rawStatus || "").toLowerCase();
+
+    if (lowerStatus.includes("active") || lowerStatus.includes("pending update")) {
+      finalStatus = "Active";
+      eligible = true;
+    } else if (
+      lowerStatus.includes("redemption") ||
+      lowerStatus.includes("inactive") ||
+      lowerStatus.includes("expired")
+    ) {
+      finalStatus = item.rawStatus;
+      eligible = false;
+    } else {
+      const parsed = new Date(expirationText);
+      if (!Number.isNaN(parsed.getTime())) {
+        parsed.setHours(0, 0, 0, 0);
+        if (parsed >= today) {
+          finalStatus = "Active";
+          eligible = true;
+        } else {
+          finalStatus = "Not Active";
+          eligible = false;
+        }
+      }
+    }
+
+    return {
+      ...item,
+      status: finalStatus,
+      eligible,
+    };
+  });
+}
+
+async function collectAllPortfolioDomains(page, log = () => {}) {
+  await gotoPortfolio(page, log);
+
+  const all = new Map();
+  let sameCount = 0;
+  let lastSize = 0;
+
+  for (let round = 0; round < 300; round++) {
+    const visible = await extractVisiblePortfolioRows(page);
+
+    for (const item of visible) {
+      if (!all.has(item.domain)) {
+        all.set(item.domain, item);
+      } else {
+        const prev = all.get(item.domain);
+        all.set(item.domain, {
+          ...prev,
+          ...item,
+          forwarding: item.forwarding || prev.forwarding || "",
+          rawStatus: item.rawStatus || prev.rawStatus || "Unknown",
+          expiration: item.expiration || prev.expiration || "Unknown",
+        });
+      }
+    }
+
+    const currentSize = all.size;
+    log(`Collect round ${round + 1}: ${currentSize} unique domains collected.`);
+
+    if (currentSize === lastSize) {
+      sameCount += 1;
+    } else {
+      sameCount = 0;
+      lastSize = currentSize;
+    }
+
+    if (sameCount >= 6) {
+      break;
+    }
+
+    await page.mouse.wheel(0, 1800);
+    await page.waitForTimeout(700);
   }
 
-  return domains;
+  return computeEligibility(Array.from(all.values()));
 }
 
 async function goToDomainForwarding(page, domain) {
@@ -445,7 +477,6 @@ async function goToDomainForwarding(page, domain) {
 
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await page.waitForLoadState("networkidle").catch(() => null);
-
   await dismissCookieBanner(page);
 
   await page.waitForSelector(`text="${domain}"`, { timeout: 15000 });
@@ -479,43 +510,16 @@ async function goToDomainForwarding(page, domain) {
   await page.waitForTimeout(1500);
 }
 
-async function findForwardingRow(page, domain) {
-  const row = page.locator("tr").filter({ hasText: domain }).first();
-  if (await row.count().catch(() => 0)) return row;
-
-  const rowRole = page.locator('[role="row"]').filter({ hasText: domain }).first();
-  if (await rowRole.count().catch(() => 0)) return rowRole;
-
-  return null;
-}
-
-async function openEditModal(page, domain) {
-  const row = await findForwardingRow(page, domain);
-  if (!row) return false;
-
-  const buttons = row.locator("button");
-  const count = await buttons.count().catch(() => 0);
-
-  if (count <= 0) return false;
-
-  let clicked = false;
-
-  for (let i = count - 1; i >= 0; i--) {
-    try {
-      await buttons.nth(i).click();
-      clicked = true;
-      break;
-    } catch {}
+async function openForwardingEditModal(page) {
+  const editButton = page.locator('button:has-text("Edit")').first();
+  if (await editButton.isVisible().catch(() => false)) {
+    await editButton.click();
+    await page.waitForTimeout(1000);
   }
 
-  if (!clicked) return false;
-
-  await page.waitForTimeout(1000);
-
   const modal = page.locator('div[role="dialog"]').first();
-  const modalVisible = await modal.isVisible().catch(() => false);
-
-  if (!modalVisible) return false;
+  const visible = await modal.isVisible().catch(() => false);
+  if (!visible) return false;
 
   await modal.locator('input[type="text"]').first().waitFor({
     state: "visible",
@@ -527,9 +531,8 @@ async function openEditModal(page, domain) {
 
 async function readForwardingFromModal(page) {
   const modal = page.locator('div[role="dialog"]').first();
-
-  const modalVisible = await modal.isVisible().catch(() => false);
-  if (!modalVisible) return null;
+  const visible = await modal.isVisible().catch(() => false);
+  if (!visible) return null;
 
   let protocol = "http://";
 
@@ -598,7 +601,6 @@ async function saveForwardingModal(page) {
 async function closeModalIfOpen(page) {
   const modal = page.locator('div[role="dialog"]').first();
   const visible = await modal.isVisible().catch(() => false);
-
   if (!visible) return;
 
   const cancelBtn = modal.locator('button:has-text("Cancel")').first();
@@ -619,22 +621,13 @@ async function setForwardingForDomain(page, domain, log) {
 
   await goToDomainForwarding(page, domain);
 
-  const row = await findForwardingRow(page, domain);
-
-  if (!row) {
-    log(`SKIP ${domain} -> no forwarding row.`);
-    return { status: "skip", reason: "no_row" };
-  }
-
-  const opened = await openEditModal(page, domain);
-
+  const opened = await openForwardingEditModal(page);
   if (!opened) {
-    log(`SKIP ${domain} -> could not open edit modal.`);
+    log(`SKIP ${domain} -> could not open forwarding edit modal.`);
     return { status: "skip", reason: "cannot_open_modal" };
   }
 
   const existingUrl = await readForwardingFromModal(page);
-
   if (!existingUrl) {
     log(`SKIP ${domain} -> could not read forwarding URL.`);
     await closeModalIfOpen(page);
@@ -673,7 +666,7 @@ async function runBot(log) {
   log("Make sure you are logged into GoDaddy in the opened Chrome window.");
   log("The bot is starting...");
 
-  const allDomains = await collectDomainsWithStatus(page, log);
+  const allDomains = await collectAllPortfolioDomains(page, log);
 
   if (!allDomains.length) {
     throw new Error("No domains found.");
@@ -691,16 +684,18 @@ async function runBot(log) {
     return true;
   });
 
-  log(`Found ${allDomains.length} visible total domains.`);
+  log(`Found ${allDomains.length} total domains.`);
   log(`Active domains found: ${activeDomains.length}`);
-  log(`Domains with matching forwarding base found: ${forwardingCandidates.length}`);
+  log(`Matching forwarding candidates: ${forwardingCandidates.length}`);
   log("");
 
-  log("MATCHING FORWARDING CANDIDATES:");
-  for (const item of forwardingCandidates) {
-    log(
-      `${item.domain} | status=${item.status} | exp=${item.expiration} | forwarding=${item.forwarding}`
-    );
+  if (forwardingCandidates.length) {
+    log("MATCHING FORWARDING CANDIDATES:");
+    for (const item of forwardingCandidates) {
+      log(
+        `${item.domain} | status=${item.status} | exp=${item.expiration} | forwarding=${item.forwarding}`
+      );
+    }
   }
 
   const updated = [];
@@ -716,6 +711,8 @@ async function runBot(log) {
     const item = forwardingCandidates[index];
     const domain = item.domain;
 
+    log(`\nProgress: ${index + 1}/${forwardingCandidates.length}`);
+
     try {
       if (!context || context.isClosed()) {
         ({ browser, context, page } = await rebuildSession(log));
@@ -723,7 +720,7 @@ async function runBot(log) {
         page = await ensureWorkingPage(context, log);
       }
 
-      if (index > 0 && index % 50 === 0) {
+      if (index > 0 && index % 40 === 0) {
         log(`Refreshing session after ${index} domains...`);
         ({ browser, context, page } = await rebuildSession(log));
         await delay(2500);
@@ -749,7 +746,8 @@ async function runBot(log) {
       if (
         /Target page, context or browser has been closed/i.test(message) ||
         /ECONNREFUSED/i.test(message) ||
-        /Session closed/i.test(message)
+        /Session closed/i.test(message) ||
+        /ERR_ABORTED/i.test(message)
       ) {
         try {
           log("Attempting recovery after closed page/browser...");
