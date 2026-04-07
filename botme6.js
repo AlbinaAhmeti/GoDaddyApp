@@ -9,9 +9,6 @@ const BASE_HOST = "buynownames.com";
 const BASE_PATH_WITH_SLASH = "/domain-for-sale/";
 const BASE_PATH_NO_SLASH = "/domain-for-sale";
 
-const DEBUG_PORT = 9222;
-const DEBUG_URL = `http://127.0.0.1:${DEBUG_PORT}`;
-
 let shouldStop = false;
 
 function requestStop() {
@@ -22,27 +19,13 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function safeRun(fn, retries = 2, waitMs = 1500) {
-  let lastError;
-
-  for (let i = 0; i <= retries; i++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastError = err;
-      if (i < retries) {
-        await delay(waitMs);
-      }
-    }
-  }
-
-  throw lastError;
-}
-
 function getChromePath() {
   const possiblePaths = [
+    // macOS
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+
+    // Windows
     "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
     "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
   ];
@@ -66,27 +49,9 @@ function getUserDataDir() {
   return path.join(os.tmpdir(), "chrome-godaddy-profile");
 }
 
-function tryRemoveOldSingletonLocks(userDataDir) {
-  try {
-    const candidates = [
-      path.join(userDataDir, "SingletonLock"),
-      path.join(userDataDir, "SingletonCookie"),
-      path.join(userDataDir, "SingletonSocket"),
-    ];
-
-    for (const file of candidates) {
-      if (fs.existsSync(file)) {
-        try {
-          fs.rmSync(file, { force: true });
-        } catch {}
-      }
-    }
-  } catch {}
-}
-
 function isDebugPortReady() {
   return new Promise((resolve) => {
-    const req = http.get(`${DEBUG_URL}/json/version`, (res) => {
+    const req = http.get("http://127.0.0.1:9222/json/version", (res) => {
       resolve(res.statusCode === 200);
       res.resume();
     });
@@ -109,6 +74,24 @@ async function waitForDebugPort(retries = 15) {
   return false;
 }
 
+function tryRemoveOldSingletonLocks(userDataDir) {
+  try {
+    const candidates = [
+      path.join(userDataDir, "SingletonLock"),
+      path.join(userDataDir, "SingletonCookie"),
+      path.join(userDataDir, "SingletonSocket"),
+    ];
+
+    for (const file of candidates) {
+      if (fs.existsSync(file)) {
+        try {
+          fs.rmSync(file, { force: true });
+        } catch {}
+      }
+    }
+  } catch {}
+}
+
 async function launchChromeForDebugging() {
   const chromePath = getChromePath();
   const userDataDir = getUserDataDir();
@@ -117,7 +100,7 @@ async function launchChromeForDebugging() {
 
   const args = [
     "--remote-debugging-address=127.0.0.1",
-    `--remote-debugging-port=${DEBUG_PORT}`,
+    "--remote-debugging-port=9222",
     `--user-data-dir=${userDataDir}`,
     "--no-first-run",
     "--no-default-browser-check",
@@ -125,6 +108,7 @@ async function launchChromeForDebugging() {
   ];
 
   if (process.platform === "darwin") {
+    // On macOS, using "open -na" is often more reliable for launching a fresh app instance
     spawn("open", ["-na", "Google Chrome", "--args", ...args], {
       detached: true,
       stdio: "ignore",
@@ -136,7 +120,7 @@ async function launchChromeForDebugging() {
     }).unref();
   }
 
-  const ready = await waitForDebugPort(20);
+  const ready = await waitForDebugPort(15);
   if (!ready) {
     throw new Error(
       "Chrome started, but remote debugging port 9222 did not become available."
@@ -144,12 +128,12 @@ async function launchChromeForDebugging() {
   }
 }
 
-async function connectToChromeWithRetry(retries = 6) {
+async function connectToChromeWithRetry(retries = 5) {
   let lastError;
 
   for (let i = 0; i < retries; i++) {
     try {
-      return await chromium.connectOverCDP(DEBUG_URL);
+      return await chromium.connectOverCDP("http://127.0.0.1:9222");
     } catch (err) {
       lastError = err;
       await delay(1500);
@@ -157,47 +141,6 @@ async function connectToChromeWithRetry(retries = 6) {
   }
 
   throw lastError;
-}
-
-async function ensureBrowser() {
-  await launchChromeForDebugging();
-  return await connectToChromeWithRetry();
-}
-
-async function ensureContext(browser) {
-  const contexts = browser.contexts();
-  if (contexts.length) return contexts[0];
-  return await browser.newContext();
-}
-
-async function ensureWorkingPage(context, log = () => {}) {
-  let pages = context.pages().filter((p) => !p.isClosed());
-  let page = pages.length ? pages[0] : null;
-
-  if (!page || page.isClosed()) {
-    page = await context.newPage();
-  }
-
-  page.setDefaultTimeout(20000);
-  page.setDefaultNavigationTimeout(40000);
-
-  try {
-    page.removeAllListeners("close");
-  } catch {}
-
-  page.on("close", () => {
-    log("⚠️ Page closed unexpectedly.");
-  });
-
-  return page;
-}
-
-async function rebuildSession(log = () => {}) {
-  log("Rebuilding browser session...");
-  const browser = await ensureBrowser();
-  const context = await ensureContext(browser);
-  const page = await ensureWorkingPage(context, log);
-  return { browser, context, page };
 }
 
 function buildForwardUrl(domain) {
@@ -228,22 +171,6 @@ function alreadyHasDomainParam(url) {
   }
 }
 
-function extractVisibleForwardingText(text) {
-  const clean = (text || "").replace(/\s+/g, " ").trim();
-  if (!clean || clean === "—" || clean === "-") return "";
-  return clean;
-}
-
-function looksLikeMatchingForwardingText(text) {
-  const clean = extractVisibleForwardingText(text).toLowerCase();
-
-  return (
-    clean.startsWith("https://buynownames.com/domain-for-sale") ||
-    clean.startsWith("http://buynownames.com/domain-for-sale") ||
-    clean.includes("buynownames.com/domain-for-sale")
-  );
-}
-
 async function waitAndClick(page, selectors, timeout = 7000) {
   for (const selector of selectors) {
     try {
@@ -268,21 +195,18 @@ async function dismissCookieBanner(page) {
   );
 }
 
-async function collectDomainsWithStatus(page, log = () => {}) {
+async function collectDomainsWithStatus(page) {
   await page.goto("https://dcc.godaddy.com/control/portfolio", {
     waitUntil: "domcontentloaded",
   });
 
   await page.waitForLoadState("networkidle").catch(() => null);
   await dismissCookieBanner(page);
-  await page.waitForTimeout(5000);
+  await page.waitForTimeout(6000);
 
-  const currentUrl = page.url();
-  log(`Current URL: ${currentUrl}`);
-
-  const bodyText = await page.locator("body").innerText().catch(() => "");
-  if (/sign in|log in|login/i.test(bodyText)) {
-    throw new Error("You are not logged into GoDaddy in the opened Chrome window.");
+  for (let i = 0; i < 4; i++) {
+    await page.mouse.wheel(0, 1200);
+    await page.waitForTimeout(700);
   }
 
   const domains = await page.evaluate(() => {
@@ -307,77 +231,64 @@ async function collectDomainsWithStatus(page, log = () => {}) {
       return d;
     }
 
-    function looksLikeDomain(text) {
-      return /^[a-z0-9-]+\.[a-z]{2,}$/i.test(text || "");
-    }
-
     const results = [];
     const seen = new Set();
     const today = todayStart();
 
-    const rowCandidates = Array.from(document.querySelectorAll("tr, [role='row']"));
+    // Domain rows
+    const domainNodes = Array.from(
+      document.querySelectorAll('.grid-fixed-columns-container .grid-cell-container.fixed')
+    ).filter(el => el.querySelector('.domain-name-cell a'));
 
-    for (const row of rowCandidates) {
-      const rowText = normalizeText(row.textContent);
-      if (!rowText) continue;
+    for (const domainRow of domainNodes) {
+      const cls = domainRow.className || "";
+      const match = cls.match(/row-index-(\d+)/);
+      if (!match) continue;
 
-      const links = Array.from(row.querySelectorAll("a"));
-      let domain = "";
+      const rowIndex = match[1];
 
-      for (const a of links) {
-        const txt = normalizeText(a.textContent).toLowerCase();
-        if (looksLikeDomain(txt)) {
-          domain = txt;
-          break;
-        }
-      }
+      const domainEl = domainRow.querySelector('.domain-name-cell a');
+      const domain = normalizeText(domainEl?.textContent).toLowerCase();
 
       if (!domain) continue;
+      if (!/^[a-z0-9-]+\.[a-z]{2,}$/i.test(domain)) continue;
       if (seen.has(domain)) continue;
 
-      const cells = Array.from(
-        row.querySelectorAll("td, [role='cell'], .grid-cell-container")
-      ).map((el) => normalizeText(el.textContent));
+      // Expiration cell for same row-index
+      const expirationRow = document.querySelector(
+        `.grid-data-container .grid-cell-container.row-index-${rowIndex}[style*="left: 398px"]`
+      );
 
-      const joined = cells.join(" | ");
-      const lowerJoined = joined.toLowerCase();
+      // Status cell for same row-index
+      const statusRow = document.querySelector(
+        `.grid-data-container .grid-cell-container.row-index-${rowIndex}.last-column`
+      );
 
-      let expirationText = "";
-      for (const c of cells) {
-        const d = parseDateText(c);
-        if (d) {
-          expirationText = c;
-          break;
-        }
-      }
-
-      let rawStatus = "Unknown";
-
-      if (lowerJoined.includes("redemption")) {
-        rawStatus = "Redemption";
-      } else if (lowerJoined.includes("inactive")) {
-        rawStatus = "Inactive";
-      } else if (lowerJoined.includes("expired")) {
-        rawStatus = "Expired";
-      } else if (lowerJoined.includes("active")) {
-        rawStatus = "Active";
-      }
+      const expirationText = normalizeText(expirationRow?.textContent);
+      const statusText = normalizeText(statusRow?.textContent);
 
       let finalStatus = "Unknown";
       let eligible = false;
 
-      if (rawStatus === "Active") {
+      const lowerStatus = statusText.toLowerCase();
+
+      // 1) primary source = row status
+      if (lowerStatus.includes("active")) {
         finalStatus = "Active";
         eligible = true;
-      } else if (
-        rawStatus === "Redemption" ||
-        rawStatus === "Inactive" ||
-        rawStatus === "Expired"
-      ) {
-        finalStatus = rawStatus;
+      } else if (lowerStatus.includes("redemption")) {
+        finalStatus = "Redemption";
+        eligible = false;
+      } else if (lowerStatus.includes("expired")) {
+        finalStatus = "Expired";
+        eligible = false;
+      } else if (lowerStatus.includes("inactive")) {
+        finalStatus = "Inactive";
         eligible = false;
       } else {
+        // 2) fallback = expiration date
         const expDate = parseDateText(expirationText);
+
         if (expDate) {
           if (expDate >= today) {
             finalStatus = "Active";
@@ -389,37 +300,12 @@ async function collectDomainsWithStatus(page, log = () => {}) {
         }
       }
 
-      let forwardingText = "";
-
-      for (const a of links) {
-        const href = a.getAttribute("href") || "";
-        const txt = normalizeText(a.textContent);
-
-        if (
-          href.toLowerCase().includes("buynownames.com/domain-for-sale") ||
-          txt.toLowerCase().includes("buynownames.com/domain-for-sale")
-        ) {
-          forwardingText = href || txt;
-          break;
-        }
-      }
-
-      if (!forwardingText) {
-        for (const c of cells) {
-          if (c.toLowerCase().includes("buynownames.com/domain-for-sale")) {
-            forwardingText = c;
-            break;
-          }
-        }
-      }
-
       results.push({
         domain,
         expiration: expirationText || "Unknown",
-        rawStatus,
+        rawStatus: statusText || "Unknown",
         status: finalStatus,
         eligible,
-        forwarding: forwardingText || "",
       });
 
       seen.add(domain);
@@ -427,15 +313,6 @@ async function collectDomainsWithStatus(page, log = () => {}) {
 
     return results;
   });
-
-  log(`Visible rows read: ${domains.length}`);
-
-  if (!domains.length) {
-    await page.screenshot({
-      path: "debug-portfolio-no-domains.png",
-      fullPage: true,
-    }).catch(() => null);
-  }
 
   return domains;
 }
@@ -668,74 +545,61 @@ async function setForwardingForDomain(page, domain, log) {
 async function runBot(log) {
   shouldStop = false;
 
-  let { browser, context, page } = await rebuildSession(log);
+  await launchChromeForDebugging();
+  const browser = await connectToChromeWithRetry();
+
+  const contexts = browser.contexts();
+  if (!contexts.length) {
+    throw new Error("No Chrome context found.");
+  }
+
+  const context = contexts[0];
+  const pages = context.pages();
+  const page = pages.length ? pages[0] : await context.newPage();
+
+  page.setDefaultTimeout(10000);
+  page.setDefaultNavigationTimeout(20000);
 
   log("Make sure you are logged into GoDaddy in the opened Chrome window.");
   log("The bot is starting...");
-
-  const allDomains = await collectDomainsWithStatus(page, log);
-
-  if (!allDomains.length) {
-    throw new Error("No domains found.");
-  }
-
-  const activeDomains = allDomains.filter((item) => item.eligible);
-
-  const forwardingCandidates = activeDomains.filter((item) => {
-    const forwarding = (item.forwarding || "").toLowerCase();
-
-    if (!forwarding) return false;
-    if (!looksLikeMatchingForwardingText(forwarding)) return false;
-    if (forwarding.includes("?domain=")) return false;
-
-    return true;
-  });
-
-  log(`Found ${allDomains.length} visible total domains.`);
-  log(`Active domains found: ${activeDomains.length}`);
-  log(`Domains with matching forwarding base found: ${forwardingCandidates.length}`);
-  log("");
-
-  log("MATCHING FORWARDING CANDIDATES:");
-  for (const item of forwardingCandidates) {
-    log(
-      `${item.domain} | status=${item.status} | exp=${item.expiration} | forwarding=${item.forwarding}`
-    );
-  }
 
   const updated = [];
   const skipped = [];
   const failed = [];
 
-  for (let index = 0; index < forwardingCandidates.length; index++) {
+  const allDomains = await collectDomainsWithStatus(page);
+
+  if (!allDomains.length) {
+    throw new Error("No domains found.");
+  }
+
+  log(`Found ${allDomains.length} total domains.`);
+  log("");
+  log("DOMAIN STATUS LIST:");
+
+  for (const item of allDomains) {
+    log(
+      `${item.domain} | status=${item.status} | raw=${item.rawStatus} | exp=${item.expiration} | ${
+        item.eligible ? "ACTIVE" : "SKIP"
+      }`
+    );
+  }
+
+  const activeDomains = allDomains.filter((item) => item.eligible);
+
+  log("");
+  log(`Processing only active domains: ${activeDomains.length}`);
+
+  for (const item of activeDomains) {
     if (shouldStop) {
       log("Stop requested. Bot stopped before processing the next domain.");
       break;
     }
 
-    const item = forwardingCandidates[index];
     const domain = item.domain;
 
     try {
-      if (!context || context.isClosed()) {
-        ({ browser, context, page } = await rebuildSession(log));
-      } else {
-        page = await ensureWorkingPage(context, log);
-      }
-
-      if (index > 0 && index % 50 === 0) {
-        log(`Refreshing session after ${index} domains...`);
-        ({ browser, context, page } = await rebuildSession(log));
-        await delay(2500);
-      }
-
-      const result = await safeRun(async () => {
-        if (!page || page.isClosed()) {
-          page = await ensureWorkingPage(context, log);
-        }
-
-        return await setForwardingForDomain(page, domain, log);
-      }, 2, 2000);
+      const result = await setForwardingForDomain(page, domain, log);
 
       if (result.status === "updated") {
         updated.push(domain);
@@ -743,26 +607,9 @@ async function runBot(log) {
         skipped.push({ domain, reason: result.reason });
       }
     } catch (err) {
-      const message = err?.message || String(err);
-      log(`FAIL ${domain} -> ${message}`);
-
-      if (
-        /Target page, context or browser has been closed/i.test(message) ||
-        /ECONNREFUSED/i.test(message) ||
-        /Session closed/i.test(message)
-      ) {
-        try {
-          log("Attempting recovery after closed page/browser...");
-          ({ browser, context, page } = await rebuildSession(log));
-        } catch (recoveryErr) {
-          log(`Recovery failed -> ${recoveryErr.message}`);
-        }
-      }
-
-      failed.push({ domain, reason: message });
+      log(`FAIL ${domain} -> ${err.message}`);
+      failed.push({ domain, reason: err.message });
     }
-
-    await delay(1200);
   }
 
   log("\n------------------------------");
