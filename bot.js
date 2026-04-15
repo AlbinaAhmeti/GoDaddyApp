@@ -1074,7 +1074,7 @@ async function runBot(log) {
   }
 
   log("\n------------------------------");
-  log("SUMMARY");
+  log("SUMMARY:");
   log("------------------------------");
   log(`Updated: ${updated.length}`);
   log(`Skipped: ${skipped.length}`);
