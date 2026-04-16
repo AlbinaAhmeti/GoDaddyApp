@@ -505,28 +505,38 @@ async function goToDomainForwarding(page, domain) {
   await dismissCookieBanner(page);
   await page.waitForTimeout(2000);
 
-  const currentUrl = page.url().toLowerCase();
   const bodyText = await page.locator("body").innerText().catch(() => "");
-
-  // Ensure we are really on the domain-specific page, not generic DNS Management.
-  if (
-    currentUrl.includes("/control/dnsmanagement") ||
-    !bodyText.toLowerCase().includes(domain.toLowerCase())
-  ) {
-    throw new Error(`Did not land on the domain-specific settings page for ${domain}. Current URL: ${page.url()}`);
+  if (!bodyText.toLowerCase().includes(domain.toLowerCase())) {
+    throw new Error(`Did not land on the settings page for ${domain}. Current URL: ${page.url()}`);
   }
 
-  const clickedDns = await waitAndClick(
-    page,
-    ['a:has-text("DNS")', 'button:has-text("DNS")', 'text="DNS"'],
-    8000
-  );
+  // Click the DNS tab in the middle tab bar, not the left sidebar item.
+  let clickedDnsTab = false;
 
-  if (!clickedDns) {
-    throw new Error("Could not click DNS.");
+  const dnsTabByRole = page.getByRole("tab", { name: /^dns$/i }).first();
+  if (await dnsTabByRole.isVisible().catch(() => false)) {
+    await dnsTabByRole.click();
+    clickedDnsTab = true;
   }
 
-  await page.waitForTimeout(1200);
+  if (!clickedDnsTab) {
+    const dnsTabFallback = page.locator('[role="tablist"]').getByText(/^DNS$/i).first();
+    if (await dnsTabFallback.isVisible().catch(() => false)) {
+      await dnsTabFallback.click();
+      clickedDnsTab = true;
+    }
+  }
+
+  if (!clickedDnsTab) {
+    throw new Error("Could not click domain DNS tab.");
+  }
+
+  await page.waitForTimeout(1500);
+
+  const afterDnsUrl = page.url().toLowerCase();
+  if (afterDnsUrl.includes("/control/dnsmanagement")) {
+    throw new Error(`Clicked the left DNS menu instead of the domain DNS tab for ${domain}.`);
+  }
 
   const clickedForwarding = await waitAndClick(
     page,
