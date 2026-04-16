@@ -503,20 +503,40 @@ async function goToDomainForwarding(page, domain) {
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await page.waitForLoadState("networkidle").catch(() => null);
   await dismissCookieBanner(page);
+  await page.waitForTimeout(2000);
 
-  await page.waitForSelector(`text="${domain}"`, { timeout: 15000 });
-
-  const clickedDns = await waitAndClick(
-    page,
-    ['a:has-text("DNS")', 'button:has-text("DNS")', 'text="DNS"'],
-    8000
-  );
-
-  if (!clickedDns) {
-    throw new Error("Could not click DNS.");
+  const bodyText = await page.locator("body").innerText().catch(() => "");
+  if (!bodyText.toLowerCase().includes(domain.toLowerCase())) {
+    throw new Error(`Did not land on the settings page for ${domain}. Current URL: ${page.url()}`);
   }
 
-  await page.waitForTimeout(1200);
+  // Click the DNS tab in the middle tab bar, not the left sidebar item.
+  let clickedDnsTab = false;
+
+  const dnsTabByRole = page.getByRole("tab", { name: /^dns$/i }).first();
+  if (await dnsTabByRole.isVisible().catch(() => false)) {
+    await dnsTabByRole.click();
+    clickedDnsTab = true;
+  }
+
+  if (!clickedDnsTab) {
+    const dnsTabFallback = page.locator('[role="tablist"]').getByText(/^DNS$/i).first();
+    if (await dnsTabFallback.isVisible().catch(() => false)) {
+      await dnsTabFallback.click();
+      clickedDnsTab = true;
+    }
+  }
+
+  if (!clickedDnsTab) {
+    throw new Error("Could not click domain DNS tab.");
+  }
+
+  await page.waitForTimeout(1500);
+
+  const afterDnsUrl = page.url().toLowerCase();
+  if (afterDnsUrl.includes("/control/dnsmanagement")) {
+    throw new Error(`Clicked the left DNS menu instead of the domain DNS tab for ${domain}.`);
+  }
 
   const clickedForwarding = await waitAndClick(
     page,
@@ -808,6 +828,7 @@ async function goToPortfolioPage(page, targetPage, log = () => { }) {
   return false;
 }
 
+
 async function collectDomainsFromCurrentPage(page, log = () => { }) {
   const pageRows = new Map();
   let sameCount = 0;
@@ -964,26 +985,16 @@ async function runBot(log) {
     return status.includes("active") || status.includes("pending update");
   });
 
-  const forwardingCandidates = activeDomains.filter((item) => {
-    const forwarding = (item.forwarding || "").toLowerCase();
-
-    if (!forwarding) return false;
-    if (!forwarding.includes("buynownames.com/domain-for-sale")) return false;
-    if (forwarding.includes("?domain=")) return false;
-
-    return true;
-  });
-
   log(`Found ${allDomains.length} total domains.`);
   log(`Active domains found: ${activeDomains.length}`);
-  log(`Matching forwarding candidates: ${forwardingCandidates.length}`);
+  log(`Domains to inspect in forwarding modal: ${activeDomains.length}`);
   log("");
 
-  if (forwardingCandidates.length) {
-    log("MATCHING FORWARDING CANDIDATES:");
-    for (const item of forwardingCandidates) {
+  if (activeDomains.length) {
+    log("ACTIVE DOMAINS TO INSPECT:");
+    for (const item of activeDomains) {
       log(
-        `${item.domain} | status=${item.status} | exp=${item.expiration} | forwarding=${item.forwarding}`
+        `${item.domain} | status=${item.status} | exp=${item.expiration} | tableForwarding=${item.forwarding || "-"}`
       );
     }
   }
@@ -992,16 +1003,16 @@ async function runBot(log) {
   const skipped = [];
   const failed = [];
 
-  for (let index = 0; index < forwardingCandidates.length; index++) {
+  for (let index = 0; index < activeDomains.length; index++) {
     if (shouldStop) {
       log("Stop requested. Bot stopped before processing the next domain.");
       break;
     }
 
-    const item = forwardingCandidates[index];
+    const item = activeDomains[index];
     const domain = item.domain;
 
-    log(`\nProgress: ${index + 1}/${forwardingCandidates.length}`);
+    log(`\nProgress: ${index + 1}/${activeDomains.length}`);
 
     try {
       if (!context || context.isClosed()) {
