@@ -503,8 +503,18 @@ async function goToDomainForwarding(page, domain) {
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await page.waitForLoadState("networkidle").catch(() => null);
   await dismissCookieBanner(page);
+  await page.waitForTimeout(2000);
 
-  await page.waitForSelector(`text="${domain}"`, { timeout: 15000 });
+  const currentUrl = page.url().toLowerCase();
+  const bodyText = await page.locator("body").innerText().catch(() => "");
+
+  // Ensure we are really on the domain-specific page, not generic DNS Management.
+  if (
+    currentUrl.includes("/control/dnsmanagement") ||
+    !bodyText.toLowerCase().includes(domain.toLowerCase())
+  ) {
+    throw new Error(`Did not land on the domain-specific settings page for ${domain}. Current URL: ${page.url()}`);
+  }
 
   const clickedDns = await waitAndClick(
     page,
