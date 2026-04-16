@@ -808,6 +808,7 @@ async function goToPortfolioPage(page, targetPage, log = () => { }) {
   return false;
 }
 
+
 async function collectDomainsFromCurrentPage(page, log = () => { }) {
   const pageRows = new Map();
   let sameCount = 0;
