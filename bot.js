@@ -964,26 +964,16 @@ async function runBot(log) {
     return status.includes("active") || status.includes("pending update");
   });
 
-  const forwardingCandidates = activeDomains.filter((item) => {
-    const forwarding = (item.forwarding || "").toLowerCase();
-
-    if (!forwarding) return false;
-    if (!forwarding.includes("buynownames.com/domain-for-sale")) return false;
-    if (forwarding.includes("?domain=")) return false;
-
-    return true;
-  });
-
   log(`Found ${allDomains.length} total domains.`);
   log(`Active domains found: ${activeDomains.length}`);
-  log(`Matching forwarding candidates: ${forwardingCandidates.length}`);
+  log(`Domains to inspect in forwarding modal: ${activeDomains.length}`);
   log("");
 
-  if (forwardingCandidates.length) {
-    log("MATCHING FORWARDING CANDIDATES:");
-    for (const item of forwardingCandidates) {
+  if (activeDomains.length) {
+    log("ACTIVE DOMAINS TO INSPECT:");
+    for (const item of activeDomains) {
       log(
-        `${item.domain} | status=${item.status} | exp=${item.expiration} | forwarding=${item.forwarding}`
+        `${item.domain} | status=${item.status} | exp=${item.expiration} | tableForwarding=${item.forwarding || "-"}`
       );
     }
   }
@@ -992,16 +982,16 @@ async function runBot(log) {
   const skipped = [];
   const failed = [];
 
-  for (let index = 0; index < forwardingCandidates.length; index++) {
+  for (let index = 0; index < activeDomains.length; index++) {
     if (shouldStop) {
       log("Stop requested. Bot stopped before processing the next domain.");
       break;
     }
 
-    const item = forwardingCandidates[index];
+    const item = activeDomains[index];
     const domain = item.domain;
 
-    log(`\nProgress: ${index + 1}/${forwardingCandidates.length}`);
+    log(`\nProgress: ${index + 1}/${activeDomains.length}`);
 
     try {
       if (!context || context.isClosed()) {
