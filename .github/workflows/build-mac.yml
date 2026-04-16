@@ -34,7 +34,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mac-build
-          path: dist/*
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/latest-mac.yml
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -42,6 +45,8 @@ jobs:
           tag_name: mac-build-${{ github.run_number }}
           name: macOS Build ${{ github.run_number }}
           files: |
-            dist/*
+            dist/*.dmg
+            dist/*.zip
+            dist/latest-mac.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
